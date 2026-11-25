@@ -1,23 +1,41 @@
-"""Windows WASAPI Loopback & Microphone audio capture with VAD segmentation."""
+"""Cross-platform audio capture (Windows WASAPI Loopback & macOS/Linux sounddevice) with VAD."""
 
 from __future__ import annotations
 
 import io
 import queue
+import sys
 import threading
 import time
 import wave
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Callable
+from typing import Any, Callable
 
 import numpy as np
-import pyaudiowpatch as pyaudio
 
 from config import AppConfig
 
+IS_WINDOWS = sys.platform == "win32"
+
+if IS_WINDOWS:
+    import pyaudiowpatch as pyaudio
+else:
+    import sounddevice as sd
+
 TARGET_SAMPLE_RATE = 16000
+
+_VIRTUAL_LOOPBACK_KEYWORDS = (
+    "blackhole",
+    "loopback",
+    "soundflower",
+    "vb-cable",
+    "background music",
+    "existential audio",
+    "monitor of",
+    "virtual",
+)
 
 
 @dataclass
@@ -57,6 +75,27 @@ def pcm_float_to_wav_bytes(samples: np.ndarray, sample_rate: int = TARGET_SAMPLE
     return buf.getvalue()
 
 
+def resample_float_to_16k_mono(samples: np.ndarray, sample_rate: int) -> np.ndarray:
+    """Convert float32 1D or (frames, channels) audio array into 16kHz mono float32."""
+    if samples.size == 0:
+        return np.empty(0, dtype=np.float32)
+
+    if samples.ndim > 1:
+        mono = samples.mean(axis=1, dtype=np.float32)
+    else:
+        mono = samples.astype(np.float32, copy=False)
+
+    if sample_rate != TARGET_SAMPLE_RATE and len(mono) > 1:
+        target_len = int(round(len(mono) * TARGET_SAMPLE_RATE / sample_rate))
+        if target_len <= 0:
+            return np.empty(0, dtype=np.float32)
+        x_old = np.linspace(0.0, 1.0, len(mono), endpoint=False)
+        x_new = np.linspace(0.0, 1.0, target_len, endpoint=False)
+        mono = np.interp(x_new, x_old, mono).astype(np.float32)
+
+    return mono
+
+
 def resample_to_16k_mono(raw_bytes: bytes, channels: int, sample_rate: int) -> np.ndarray:
     """Convert raw int16 interleaved audio bytes into 16kHz mono float32."""
     if not raw_bytes:
@@ -71,25 +110,21 @@ def resample_to_16k_mono(raw_bytes: bytes, channels: int, sample_rate: int) -> n
     else:
         mono = pcm
 
-    if sample_rate != TARGET_SAMPLE_RATE and len(mono) > 1:
-        target_len = int(round(len(mono) * TARGET_SAMPLE_RATE / sample_rate))
-        if target_len <= 0:
-            return np.empty(0, dtype=np.float32)
-        x_old = np.linspace(0.0, 1.0, len(mono), endpoint=False)
-        x_new = np.linspace(0.0, 1.0, target_len, endpoint=False)
-        mono = np.interp(x_new, x_old, mono).astype(np.float32)
-
-    return mono
+    return resample_float_to_16k_mono(mono, sample_rate)
 
 
-def list_audio_devices() -> tuple[list[AudioDeviceInfo], list[AudioDeviceInfo]]:
+def _is_virtual_loopback_name(name: str) -> bool:
+    low = name.lower()
+    return any(kw in low for kw in _VIRTUAL_LOOPBACK_KEYWORDS)
+
+
+def _list_audio_devices_windows() -> tuple[list[AudioDeviceInfo], list[AudioDeviceInfo]]:
     """Enumerate Windows WASAPI loopback devices and microphone input devices."""
     loopbacks: list[AudioDeviceInfo] = []
     mics: list[AudioDeviceInfo] = []
 
     p = pyaudio.PyAudio()
     try:
-        # 1. Identify default WASAPI output & input devices
         wasapi_api_index = -1
         default_output_name = ""
         default_wasapi_input_index = -1
@@ -112,7 +147,6 @@ def list_audio_devices() -> tuple[list[AudioDeviceInfo], list[AudioDeviceInfo]]:
         except Exception:
             pass
 
-        # 2. List WASAPI loopback devices (system audio channels)
         try:
             for dev in p.get_loopback_device_info_generator():
                 idx = int(dev["index"])
@@ -133,13 +167,10 @@ def list_audio_devices() -> tuple[list[AudioDeviceInfo], list[AudioDeviceInfo]]:
         except Exception:
             pass
 
-        # Ensure default loopback is first
         loopbacks.sort(key=lambda d: (not d.is_default, d.name.lower()))
 
-        # 3. List microphone input devices (prefer WASAPI to avoid MME/DS duplicates)
         wasapi_mics: list[AudioDeviceInfo] = []
         other_mics: list[AudioDeviceInfo] = []
-        seen_names: set[str] = set()
 
         for i in range(p.get_device_count()):
             try:
@@ -168,7 +199,6 @@ def list_audio_devices() -> tuple[list[AudioDeviceInfo], list[AudioDeviceInfo]]:
                         is_default=is_def,
                     )
                 )
-                seen_names.add(name.lower())
             else:
                 is_def = i == default_global_input_index
                 other_mics.append(
@@ -185,7 +215,6 @@ def list_audio_devices() -> tuple[list[AudioDeviceInfo], list[AudioDeviceInfo]]:
         if wasapi_mics:
             mics = wasapi_mics
         else:
-            # Deduplicate fallback mics by name
             dedup: list[AudioDeviceInfo] = []
             seen_other: set[str] = set()
             for m in other_mics:
@@ -202,12 +231,200 @@ def list_audio_devices() -> tuple[list[AudioDeviceInfo], list[AudioDeviceInfo]]:
     return loopbacks, mics
 
 
-class _ChannelCaptureWorker:
-    """Captures audio from a single device using callback mode and performs VAD chunking."""
+def _list_audio_devices_sounddevice() -> tuple[list[AudioDeviceInfo], list[AudioDeviceInfo]]:
+    """Enumerate virtual loopback devices (e.g. BlackHole) and microphones on macOS / Linux."""
+    virtual_loopbacks: list[AudioDeviceInfo] = []
+    other_inputs_as_sys: list[AudioDeviceInfo] = []
+    normal_mics: list[AudioDeviceInfo] = []
+    all_inputs: list[AudioDeviceInfo] = []
+
+    default_in_idx = -1
+    try:
+        def_pair = sd.default.device
+        if isinstance(def_pair, (list, tuple)) and len(def_pair) >= 1 and def_pair[0] is not None:
+            default_in_idx = int(def_pair[0])
+        elif isinstance(def_pair, int):
+            default_in_idx = def_pair
+    except Exception:
+        pass
+
+    devices = sd.query_devices()
+    for idx, dev in enumerate(devices):
+        max_in = int(dev.get("max_input_channels", 0))
+        if max_in <= 0:
+            continue
+        name = str(dev.get("name", f"Input {idx}")).strip()
+        sr = max(8000, int(round(float(dev.get("default_samplerate", 48000)))))
+        is_virt = _is_virtual_loopback_name(name)
+        is_def_in = idx == default_in_idx
+
+        info_mic = AudioDeviceInfo(
+            index=idx,
+            name=name,
+            channels=max_in,
+            sample_rate=sr,
+            is_loopback=False,
+            is_default=is_def_in,
+        )
+        all_inputs.append(info_mic)
+
+        if is_virt:
+            virtual_loopbacks.append(
+                AudioDeviceInfo(
+                    index=idx,
+                    name=name,
+                    channels=max_in,
+                    sample_rate=sr,
+                    is_loopback=True,
+                    is_default=False,
+                )
+            )
+        else:
+            normal_mics.append(info_mic)
+            other_inputs_as_sys.append(
+                AudioDeviceInfo(
+                    index=idx,
+                    name=name,
+                    channels=max_in,
+                    sample_rate=sr,
+                    is_loopback=True,
+                    is_default=False,
+                )
+            )
+
+    if virtual_loopbacks:
+        virtual_loopbacks.sort(key=lambda d: d.name.lower())
+        virtual_loopbacks[0].is_default = True
+    loopbacks = virtual_loopbacks + sorted(other_inputs_as_sys, key=lambda d: d.name.lower())
+
+    mics = normal_mics if normal_mics else all_inputs
+    mics.sort(key=lambda d: (not d.is_default, d.name.lower()))
+    return loopbacks, mics
+
+
+def list_audio_devices() -> tuple[list[AudioDeviceInfo], list[AudioDeviceInfo]]:
+    """Enumerate system loopback devices and microphone input devices for the current OS."""
+    if IS_WINDOWS:
+        return _list_audio_devices_windows()
+    return _list_audio_devices_sounddevice()
+
+
+class _BaseVADWorker:
+    """Shared VAD segmentation loop for both Windows WASAPI and macOS/Linux sounddevice."""
 
     def __init__(
         self,
-        pa: pyaudio.PyAudio,
+        channel_id: str,
+        channel_label: str,
+        cfg: AppConfig,
+        on_segment: Callable[[AudioSegment], None],
+        on_level: Callable[[str, float], None],
+        on_error: Callable[[str], None],
+    ) -> None:
+        self._channel_id = channel_id
+        self._channel_label = channel_label
+        self._cfg = cfg
+        self._on_segment = on_segment
+        self._on_level = on_level
+        self._on_error = on_error
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def _next_mono_chunk(self, timeout: float = 0.1) -> np.ndarray | None:
+        raise NotImplementedError
+
+    def _emit_frames(self, frames: list[np.ndarray]) -> None:
+        if not frames:
+            return
+        audio = np.concatenate(frames)
+        duration = len(audio) / float(TARGET_SAMPLE_RATE)
+        if duration < self._cfg.min_speech_duration:
+            return
+        wav_bytes = pcm_float_to_wav_bytes(audio, TARGET_SAMPLE_RATE)
+        seg = AudioSegment(
+            channel_id=self._channel_id,
+            channel_label=self._channel_label,
+            wav_bytes=wav_bytes,
+            duration_sec=duration,
+            timestamp=datetime.now().strftime("%H:%M:%S"),
+        )
+        try:
+            self._on_segment(seg)
+        except Exception as exc:
+            self._on_error(f"音频分片回调错误: {exc}")
+
+    def _run_loop(self) -> None:
+        pre_roll: deque[np.ndarray] = deque(maxlen=3)
+        speech_frames: list[np.ndarray] = []
+        speech_samples = 0
+        is_speaking = False
+        last_voice_ts = time.monotonic()
+
+        silence_limit = max(0.35, float(self._cfg.silence_duration))
+        max_samples = int(max(2.0, float(self._cfg.max_chunk_duration)) * TARGET_SAMPLE_RATE)
+        overlap_samples = int(0.2 * TARGET_SAMPLE_RATE)
+
+        try:
+            while not self._stop_event.is_set():
+                mono = self._next_mono_chunk(timeout=0.1)
+                rms = (
+                    float(np.sqrt(np.mean(mono * mono)))
+                    if (mono is not None and len(mono) > 0)
+                    else 0.0
+                )
+
+                self._on_level(self._channel_id, rms)
+                now = time.monotonic()
+                threshold = max(0.001, float(self._cfg.vad_threshold))
+
+                if mono is not None and len(mono) > 0:
+                    if rms >= threshold:
+                        if not is_speaking:
+                            is_speaking = True
+                            speech_frames = list(pre_roll)
+                            speech_samples = sum(len(f) for f in speech_frames)
+                        speech_frames.append(mono)
+                        speech_samples += len(mono)
+                        last_voice_ts = now
+                    else:
+                        pre_roll.append(mono)
+                        if is_speaking:
+                            speech_frames.append(mono)
+                            speech_samples += len(mono)
+
+                if is_speaking:
+                    silence_elapsed = now - last_voice_ts
+                    if silence_elapsed >= silence_limit:
+                        self._emit_frames(speech_frames)
+                        speech_frames = []
+                        speech_samples = 0
+                        is_speaking = False
+                    elif speech_samples >= max_samples:
+                        full_audio = np.concatenate(speech_frames)
+                        self._emit_frames([full_audio])
+                        if len(full_audio) > overlap_samples:
+                            tail = full_audio[-overlap_samples:]
+                            speech_frames = [tail]
+                            speech_samples = len(tail)
+                        else:
+                            speech_frames = []
+                            speech_samples = 0
+                        last_voice_ts = now
+
+            if is_speaking and speech_frames:
+                self._emit_frames(speech_frames)
+        except Exception as exc:
+            self._on_error(f"{self._channel_label}采集线程异常: {exc}")
+        finally:
+            self._on_level(self._channel_id, 0.0)
+
+
+class _WindowsCaptureWorker(_BaseVADWorker):
+    """Windows WASAPI loopback / microphone worker backed by PyAudioWPatch."""
+
+    def __init__(
+        self,
+        pa: Any,
         device_info: dict,
         channel_id: str,
         channel_label: str,
@@ -216,26 +433,25 @@ class _ChannelCaptureWorker:
         on_level: Callable[[str, float], None],
         on_error: Callable[[str], None],
     ) -> None:
+        super().__init__(channel_id, channel_label, cfg, on_segment, on_level, on_error)
         self._pa = pa
         self._device_info = device_info
-        self._channel_id = channel_id
-        self._channel_label = channel_label
-        self._cfg = cfg
-        self._on_segment = on_segment
-        self._on_level = on_level
-        self._on_error = on_error
-
-        self._stop_event = threading.Event()
         self._queue: queue.Queue[bytes] = queue.Queue(maxsize=250)
-        self._stream: pyaudio.Stream | None = None
-        self._thread: threading.Thread | None = None
+        self._stream: Any = None
 
         self._sample_rate = max(8000, int(device_info.get("defaultSampleRate", 48000)))
         max_ch = max(1, int(device_info.get("maxInputChannels", 1)))
         self._channels = max_ch if device_info.get("isLoopbackDevice", False) else min(max_ch, 2)
 
+    def _next_mono_chunk(self, timeout: float = 0.1) -> np.ndarray | None:
+        try:
+            raw = self._queue.get(timeout=timeout)
+            return resample_to_16k_mono(raw, self._channels, self._sample_rate)
+        except queue.Empty:
+            return None
+
     def start(self) -> None:
-        frames_per_buffer = max(256, int(self._sample_rate * 0.1))  # ~100ms per callback
+        frames_per_buffer = max(256, int(self._sample_rate * 0.1))
         dev_idx = int(self._device_info["index"])
 
         def _callback(in_data, frame_count, time_info, status_flags):
@@ -250,7 +466,6 @@ class _ChannelCaptureWorker:
                         pass
             return (None, pyaudio.paContinue)
 
-        # Open stream; if mic rejects 2ch, fallback to device native maxInputChannels or 1ch
         open_errors: list[str] = []
         channel_candidates = [self._channels]
         if not self._device_info.get("isLoopbackDevice", False):
@@ -307,94 +522,104 @@ class _ChannelCaptureWorker:
             self._thread.join(timeout=2.0)
         self._thread = None
 
-    def _emit_frames(self, frames: list[np.ndarray]) -> None:
-        if not frames:
-            return
-        audio = np.concatenate(frames)
-        duration = len(audio) / float(TARGET_SAMPLE_RATE)
-        if duration < self._cfg.min_speech_duration:
-            return
-        wav_bytes = pcm_float_to_wav_bytes(audio, TARGET_SAMPLE_RATE)
-        seg = AudioSegment(
-            channel_id=self._channel_id,
-            channel_label=self._channel_label,
-            wav_bytes=wav_bytes,
-            duration_sec=duration,
-            timestamp=datetime.now().strftime("%H:%M:%S"),
-        )
+
+class _SoundDeviceCaptureWorker(_BaseVADWorker):
+    """macOS / Linux audio capture worker backed by sounddevice."""
+
+    def __init__(
+        self,
+        device_info: AudioDeviceInfo,
+        channel_id: str,
+        channel_label: str,
+        cfg: AppConfig,
+        on_segment: Callable[[AudioSegment], None],
+        on_level: Callable[[str, float], None],
+        on_error: Callable[[str], None],
+    ) -> None:
+        super().__init__(channel_id, channel_label, cfg, on_segment, on_level, on_error)
+        self._device_info = device_info
+        self._queue: queue.Queue[np.ndarray] = queue.Queue(maxsize=250)
+        self._stream: Any = None
+        self._sample_rate = max(8000, int(device_info.sample_rate))
+        self._channels = min(max(1, int(device_info.channels)), 2)
+
+    def _next_mono_chunk(self, timeout: float = 0.1) -> np.ndarray | None:
         try:
-            self._on_segment(seg)
-        except Exception as exc:
-            self._on_error(f"音频分片回调错误: {exc}")
+            chunk = self._queue.get(timeout=timeout)
+            return resample_float_to_16k_mono(chunk, self._sample_rate)
+        except queue.Empty:
+            return None
 
-    def _run_loop(self) -> None:
-        pre_roll: deque[np.ndarray] = deque(maxlen=3)  # ~300ms pre-speech buffer
-        speech_frames: list[np.ndarray] = []
-        speech_samples = 0
-        is_speaking = False
-        last_voice_ts = time.monotonic()
+    def start(self) -> None:
+        blocksize = max(256, int(self._sample_rate * 0.1))
 
-        silence_limit = max(0.35, float(self._cfg.silence_duration))
-        max_samples = int(max(2.0, float(self._cfg.max_chunk_duration)) * TARGET_SAMPLE_RATE)
-        overlap_samples = int(0.2 * TARGET_SAMPLE_RATE)
-
-        try:
-            while not self._stop_event.is_set():
+        def _callback(indata, frames, time_info, status):
+            if not self._stop_event.is_set() and indata is not None and indata.size > 0:
+                copied = indata.copy()
                 try:
-                    raw = self._queue.get(timeout=0.1)
-                    mono = resample_to_16k_mono(raw, self._channels, self._sample_rate)
-                    rms = float(np.sqrt(np.mean(mono * mono))) if len(mono) > 0 else 0.0
-                except queue.Empty:
-                    # Critical for WASAPI loopback: when system is silent, no callbacks fire.
-                    mono = None
-                    rms = 0.0
+                    self._queue.put_nowait(copied)
+                except queue.Full:
+                    try:
+                        self._queue.get_nowait()
+                        self._queue.put_nowait(copied)
+                    except Exception:
+                        pass
 
-                self._on_level(self._channel_id, rms)
-                now = time.monotonic()
-                threshold = max(0.001, float(self._cfg.vad_threshold))
+        open_errors: list[str] = []
+        channel_candidates = [self._channels]
+        for c in (self._device_info.channels, 1):
+            if c >= 1 and c not in channel_candidates:
+                channel_candidates.append(c)
 
-                if mono is not None and len(mono) > 0:
-                    if rms >= threshold:
-                        if not is_speaking:
-                            is_speaking = True
-                            speech_frames = list(pre_roll)
-                            speech_samples = sum(len(f) for f in speech_frames)
-                        speech_frames.append(mono)
-                        speech_samples += len(mono)
-                        last_voice_ts = now
-                    else:
-                        pre_roll.append(mono)
-                        if is_speaking:
-                            speech_frames.append(mono)
-                            speech_samples += len(mono)
+        for ch in channel_candidates:
+            try:
+                self._stream = sd.InputStream(
+                    device=self._device_info.index,
+                    channels=ch,
+                    samplerate=self._sample_rate,
+                    dtype="float32",
+                    blocksize=blocksize,
+                    callback=_callback,
+                )
+                self._stream.start()
+                self._channels = ch
+                break
+            except Exception as exc:
+                open_errors.append(f"{ch}ch: {exc}")
+                self._stream = None
 
-                if is_speaking:
-                    silence_elapsed = now - last_voice_ts
-                    if silence_elapsed >= silence_limit:
-                        self._emit_frames(speech_frames)
-                        speech_frames = []
-                        speech_samples = 0
-                        is_speaking = False
-                    elif speech_samples >= max_samples:
-                        # Continuous talk without long pauses: split smoothly & keep brief overlap
-                        full_audio = np.concatenate(speech_frames)
-                        self._emit_frames([full_audio])
-                        if len(full_audio) > overlap_samples:
-                            tail = full_audio[-overlap_samples:]
-                            speech_frames = [tail]
-                            speech_samples = len(tail)
-                        else:
-                            speech_frames = []
-                            speech_samples = 0
-                        last_voice_ts = now
+        if self._stream is None:
+            hint = ""
+            if sys.platform == "darwin":
+                hint = "\n提示：请在「系统设置 → 隐私与安全性 → 麦克风」中允许终端 / Python 访问麦克风。"
+            raise RuntimeError(
+                f"无法打开{self._channel_label}设备 [{self._device_info.name}]: "
+                + "; ".join(open_errors)
+                + hint
+            )
 
-            # Flush remaining speech when user clicks Stop
-            if is_speaking and speech_frames:
-                self._emit_frames(speech_frames)
-        except Exception as exc:
-            self._on_error(f"{self._channel_label}采集线程异常: {exc}")
-        finally:
-            self._on_level(self._channel_id, 0.0)
+        self._thread = threading.Thread(
+            target=self._run_loop,
+            name=f"AudioVAD-{self._channel_id}",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        if self._stream is not None:
+            try:
+                self._stream.stop()
+            except Exception:
+                pass
+            try:
+                self._stream.close()
+            except Exception:
+                pass
+            self._stream = None
+        if self._thread is not None and self._thread.is_alive():
+            self._thread.join(timeout=2.0)
+        self._thread = None
 
 
 class AudioCaptureManager:
@@ -409,8 +634,8 @@ class AudioCaptureManager:
         self._on_segment = on_segment
         self._on_level = on_level
         self._on_error = on_error
-        self._pa: pyaudio.PyAudio | None = None
-        self._workers: list[_ChannelCaptureWorker] = []
+        self._pa: Any = None
+        self._workers: list[Any] = []
         self._lock = threading.Lock()
 
     @property
@@ -418,27 +643,24 @@ class AudioCaptureManager:
         with self._lock:
             return len(self._workers) > 0
 
-    def _resolve_loopback_device(self, pa: pyaudio.PyAudio, cfg: AppConfig) -> dict:
+    def _resolve_win_loopback(self, pa: Any, cfg: AppConfig) -> dict:
         loopbacks = list(pa.get_loopback_device_info_generator())
         if not loopbacks:
             raise RuntimeError(
                 "未检测到 Windows WASAPI 系统音频回环设备。请检查扬声器/耳机是否已连接并启用。"
             )
 
-        # 1. Exact index + name match
         if cfg.system_device_index >= 0:
             for dev in loopbacks:
                 if int(dev["index"]) == cfg.system_device_index:
                     if not cfg.system_device_name or dev["name"] == cfg.system_device_name:
                         return dev
 
-        # 2. Name match (if indices shifted)
         if cfg.system_device_name:
             for dev in loopbacks:
                 if dev["name"] == cfg.system_device_name:
                     return dev
 
-        # 3. Auto default Windows output speaker loopback
         try:
             wasapi_info = pa.get_host_api_info_by_type(pyaudio.paWASAPI)
             default_out = pa.get_device_info_by_index(int(wasapi_info["defaultOutputDevice"]))
@@ -452,8 +674,7 @@ class AudioCaptureManager:
 
         return loopbacks[0]
 
-    def _resolve_mic_device(self, pa: pyaudio.PyAudio, cfg: AppConfig) -> dict:
-        # 1. Saved index + name match
+    def _resolve_win_mic(self, pa: Any, cfg: AppConfig) -> dict:
         if cfg.mic_device_index >= 0:
             try:
                 dev = pa.get_device_info_by_index(cfg.mic_device_index)
@@ -466,7 +687,6 @@ class AudioCaptureManager:
             except Exception:
                 pass
 
-        # 2. Saved name match (WASAPI preferred)
         if cfg.mic_device_name:
             wasapi_idx = -1
             try:
@@ -490,7 +710,6 @@ class AudioCaptureManager:
             if fallback_match is not None:
                 return fallback_match
 
-        # 3. Auto default WASAPI input device
         try:
             wasapi_info = pa.get_host_api_info_by_type(pyaudio.paWASAPI)
             default_in_idx = int(wasapi_info.get("defaultInputDevice", -1))
@@ -501,63 +720,149 @@ class AudioCaptureManager:
         except Exception:
             pass
 
-        # 4. System global default input device
         try:
             return pa.get_default_input_device_info()
         except Exception as exc:
             raise RuntimeError(f"未检测到可用麦克风设备，请检查 Windows 麦克风权限和连接: {exc}")
 
+    def _resolve_sd_loopback(self, cfg: AppConfig) -> AudioDeviceInfo:
+        loopbacks, _ = _list_audio_devices_sounddevice()
+        if cfg.system_device_index >= 0:
+            for dev in loopbacks:
+                if dev.index == cfg.system_device_index:
+                    if not cfg.system_device_name or dev.name == cfg.system_device_name:
+                        return dev
+        if cfg.system_device_name:
+            for dev in loopbacks:
+                if dev.name == cfg.system_device_name:
+                    return dev
+
+        for dev in loopbacks:
+            if _is_virtual_loopback_name(dev.name):
+                return dev
+
+        if sys.platform == "darwin":
+            raise RuntimeError(
+                "macOS 抓取「系统声音」需要先安装免费开源虚拟声卡 BlackHole 2ch：\n"
+                "1. 终端运行：brew install blackhole-2ch\n"
+                "2. 打开「音频 MIDI 设置」新建「多输出设备」（勾选扬声器/耳机 + BlackHole 2ch）并设为系统输出。\n\n"
+                "提示：线下「🎤 麦克风」收音无需安装虚拟声卡，直接点亮即可使用！"
+            )
+        raise RuntimeError(
+            "未检测到系统音频回环设备。请在「设置 → 音频与检测」中手动选择虚拟回环输入设备。"
+        )
+
+    def _resolve_sd_mic(self, cfg: AppConfig) -> AudioDeviceInfo:
+        _, mics = _list_audio_devices_sounddevice()
+        if not mics:
+            raise RuntimeError("未检测到可用麦克风设备，请检查系统麦克风权限与设备连接。")
+
+        if cfg.mic_device_index >= 0:
+            for dev in mics:
+                if dev.index == cfg.mic_device_index:
+                    if not cfg.mic_device_name or dev.name == cfg.mic_device_name:
+                        return dev
+        if cfg.mic_device_name:
+            for dev in mics:
+                if dev.name == cfg.mic_device_name:
+                    return dev
+
+        for dev in mics:
+            if dev.is_default:
+                return dev
+        return mics[0]
+
     def start(self, cfg: AppConfig) -> list[str]:
         """Start capturing according to cfg.audio_mode. Returns active device descriptions."""
         self.stop()
         with self._lock:
-            pa = pyaudio.PyAudio()
-            self._pa = pa
             active_descriptions: list[str] = []
-            started_workers: list[_ChannelCaptureWorker] = []
+            started_workers: list[Any] = []
 
-            try:
-                if cfg.audio_mode in ("system", "both"):
-                    sys_dev = self._resolve_loopback_device(pa, cfg)
-                    worker = _ChannelCaptureWorker(
-                        pa=pa,
-                        device_info=sys_dev,
-                        channel_id="system",
-                        channel_label="系统",
-                        cfg=cfg,
-                        on_segment=self._on_segment,
-                        on_level=self._on_level,
-                        on_error=self._on_error,
-                    )
-                    worker.start()
-                    started_workers.append(worker)
-                    active_descriptions.append(f"系统: {sys_dev['name']}")
+            if IS_WINDOWS:
+                pa = pyaudio.PyAudio()
+                self._pa = pa
+                try:
+                    if cfg.audio_mode in ("system", "both"):
+                        sys_dev = self._resolve_win_loopback(pa, cfg)
+                        worker = _WindowsCaptureWorker(
+                            pa=pa,
+                            device_info=sys_dev,
+                            channel_id="system",
+                            channel_label="系统",
+                            cfg=cfg,
+                            on_segment=self._on_segment,
+                            on_level=self._on_level,
+                            on_error=self._on_error,
+                        )
+                        worker.start()
+                        started_workers.append(worker)
+                        active_descriptions.append(f"系统: {sys_dev['name']}")
 
-                if cfg.audio_mode in ("mic", "both"):
-                    mic_dev = self._resolve_mic_device(pa, cfg)
-                    worker = _ChannelCaptureWorker(
-                        pa=pa,
-                        device_info=mic_dev,
-                        channel_id="mic",
-                        channel_label="麦克风",
-                        cfg=cfg,
-                        on_segment=self._on_segment,
-                        on_level=self._on_level,
-                        on_error=self._on_error,
-                    )
-                    worker.start()
-                    started_workers.append(worker)
-                    active_descriptions.append(f"麦克风: {mic_dev['name']}")
+                    if cfg.audio_mode in ("mic", "both"):
+                        mic_dev = self._resolve_win_mic(pa, cfg)
+                        worker = _WindowsCaptureWorker(
+                            pa=pa,
+                            device_info=mic_dev,
+                            channel_id="mic",
+                            channel_label="麦克风",
+                            cfg=cfg,
+                            on_segment=self._on_segment,
+                            on_level=self._on_level,
+                            on_error=self._on_error,
+                        )
+                        worker.start()
+                        started_workers.append(worker)
+                        active_descriptions.append(f"麦克风: {mic_dev['name']}")
 
-                self._workers = started_workers
-                return active_descriptions
-            except Exception:
-                for w in started_workers:
-                    w.stop()
-                pa.terminate()
-                self._pa = None
-                self._workers = []
-                raise
+                    self._workers = started_workers
+                    return active_descriptions
+                except Exception:
+                    for w in started_workers:
+                        w.stop()
+                    pa.terminate()
+                    self._pa = None
+                    self._workers = []
+                    raise
+            else:
+                try:
+                    if cfg.audio_mode in ("system", "both"):
+                        sys_dev = self._resolve_sd_loopback(cfg)
+                        worker = _SoundDeviceCaptureWorker(
+                            device_info=sys_dev,
+                            channel_id="system",
+                            channel_label="系统",
+                            cfg=cfg,
+                            on_segment=self._on_segment,
+                            on_level=self._on_level,
+                            on_error=self._on_error,
+                        )
+                        worker.start()
+                        started_workers.append(worker)
+                        active_descriptions.append(f"系统: {sys_dev.name}")
+
+                    if cfg.audio_mode in ("mic", "both"):
+                        mic_dev = self._resolve_sd_mic(cfg)
+                        worker = _SoundDeviceCaptureWorker(
+                            device_info=mic_dev,
+                            channel_id="mic",
+                            channel_label="麦克风",
+                            cfg=cfg,
+                            on_segment=self._on_segment,
+                            on_level=self._on_level,
+                            on_error=self._on_error,
+                        )
+                        worker.start()
+                        started_workers.append(worker)
+                        active_descriptions.append(f"麦克风: {mic_dev.name}")
+
+                    self._workers = started_workers
+                    return active_descriptions
+                except Exception:
+                    for w in started_workers:
+                        w.stop()
+                    self._workers = []
+                    raise
 
     def stop(self) -> None:
         with self._lock:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import sys
 
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtWidgets import (
@@ -75,7 +76,6 @@ class SettingsDialog(QDialog):
             idx = self.cmb_provider.findData(self._initial_provider)
             if idx >= 0:
                 self.cmb_provider.setCurrentIndex(idx)
-            # If opening OpenAI/compatible for the first time with no key, pre-fill SiliconFlow preset
             if (
                 self._initial_provider == "openai"
                 and not self.ed_openai_key.text().strip()
@@ -91,7 +91,7 @@ class SettingsDialog(QDialog):
         QDialog {
             background-color: #161922;
             color: #e6ebf5;
-            font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif;
+            font-family: "PingFang SC", "Microsoft YaHei UI", "Segoe UI", sans-serif;
             font-size: 13px;
         }
         QTabWidget::pane {
@@ -181,7 +181,6 @@ class SettingsDialog(QDialog):
         self.tabs.addTab(self._build_display_tab(), "翻译与显示")
         root.addWidget(self.tabs)
 
-        # Bottom buttons
         btn_row = QHBoxLayout()
         self.lbl_test_status = QLabel("")
         self.lbl_test_status.setWordWrap(True)
@@ -208,7 +207,6 @@ class SettingsDialog(QDialog):
         layout = QVBoxLayout(page)
         layout.setSpacing(10)
 
-        # Provider selector
         top_form = QFormLayout()
         self.cmb_provider = QComboBox()
         for key, meta in PROVIDER_PRESETS.items():
@@ -217,7 +215,6 @@ class SettingsDialog(QDialog):
         top_form.addRow("云端引擎:", self.cmb_provider)
         layout.addLayout(top_form)
 
-        # Gemini Group
         self.grp_gemini = QGroupBox("Google Gemini API 配置（音频一步直出翻译，推荐）")
         g_form = QFormLayout(self.grp_gemini)
 
@@ -248,7 +245,6 @@ class SettingsDialog(QDialog):
         g_form.addRow("独立 HTTP 代理:", self.ed_gemini_proxy)
         layout.addWidget(self.grp_gemini)
 
-        # OpenAI / Compatible Group
         self.grp_openai = QGroupBox("OpenAI / 兼容接口配置（支持 OpenAI、Groq、硅基流动、中转站）")
         o_form = QFormLayout(self.grp_openai)
 
@@ -295,7 +291,6 @@ class SettingsDialog(QDialog):
         self.ed_openai_proxy.setPlaceholderText("国内直连（如硅基流动）请留空；海外接口再填代理")
         o_form.addRow("独立 HTTP 代理:", self.ed_openai_proxy)
 
-        # Optional separate LLM (e.g. Groq Whisper STT + DeepSeek LLM)
         self.chk_sep_llm = QCheckBox("翻译 LLM 使用独立接口（例如：Groq 语音识别 + DeepSeek 翻译）")
         self.chk_sep_llm.toggled.connect(self._update_separate_llm_visibility)
         o_form.addRow("", self.chk_sep_llm)
@@ -317,7 +312,6 @@ class SettingsDialog(QDialog):
 
         layout.addWidget(self.grp_openai)
 
-        # Network timeout & dual-profile tip
         grp_net = QGroupBox("通用请求设置")
         n_form = QFormLayout(grp_net)
 
@@ -363,10 +357,17 @@ class SettingsDialog(QDialog):
         self.cmb_mic_dev = QComboBox()
         d_form.addRow("麦克风通道:", self.cmb_mic_dev)
 
-        tip = QLabel(
-            "提示：线上会议选「仅系统声音」可直接抓取对方声音（戴耳机也可）；\n"
-            "线下与国外客户面对面开会选「仅麦克风」；需要同时记录双方对话选「双通道」。"
-        )
+        if sys.platform == "darwin":
+            tip_text = (
+                "提示：macOS 线下「麦克风」开箱即用；抓取「系统声音」需安装免费虚拟声卡 BlackHole 2ch\n"
+                "（brew install blackhole-2ch）并在「音频 MIDI 设置」中创建多输出设备。"
+            )
+        else:
+            tip_text = (
+                "提示：线上会议选「仅系统声音」可直接抓取对方声音（戴耳机也可）；\n"
+                "线下与国外客户面对面开会选「仅麦克风」；需要同时记录双方对话选「双通道」。"
+            )
+        tip = QLabel(tip_text)
         tip.setStyleSheet("color: #8f9bb3; font-size: 12px;")
         tip.setWordWrap(True)
         d_form.addRow("", tip)
@@ -377,7 +378,7 @@ class SettingsDialog(QDialog):
 
         vad_row = QHBoxLayout()
         self.sld_vad = QSlider(Qt.Orientation.Horizontal)
-        self.sld_vad.setRange(2, 60)  # maps to 0.002 - 0.060
+        self.sld_vad.setRange(2, 60)
         self.lbl_vad_val = QLabel("0.012")
         self.lbl_vad_val.setFixedWidth(48)
         self.sld_vad.valueChanged.connect(lambda v: self.lbl_vad_val.setText(f"{v / 1000:.3f}"))
@@ -513,8 +514,12 @@ class SettingsDialog(QDialog):
 
         self.cmb_sys_dev.clear()
         self.cmb_mic_dev.clear()
-        self.cmb_sys_dev.addItem("自动跟随 Windows 默认播放设备（推荐）", (-1, ""))
-        self.cmb_mic_dev.addItem("自动跟随 Windows 默认麦克风（推荐）", (-1, ""))
+        if sys.platform == "darwin":
+            self.cmb_sys_dev.addItem("自动检测 macOS 虚拟声卡（BlackHole / Loopback）", (-1, ""))
+            self.cmb_mic_dev.addItem("自动跟随 macOS 默认麦克风（推荐）", (-1, ""))
+        else:
+            self.cmb_sys_dev.addItem("自动跟随 Windows 默认播放设备（推荐）", (-1, ""))
+            self.cmb_mic_dev.addItem("自动跟随 Windows 默认麦克风（推荐）", (-1, ""))
 
         try:
             self._loopbacks, self._mics = list_audio_devices()

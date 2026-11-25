@@ -29,29 +29,47 @@ from PyQt6.QtWidgets import (
 )
 
 from audio_capture import AudioCaptureManager, AudioSegment
-from config import AUDIO_MODES, TRANSCRIPTS_DIR, TRANSLATION_DIRECTIONS, AppConfig
+from config import APP_DIR, AUDIO_MODES, TRANSCRIPTS_DIR, TRANSLATION_DIRECTIONS, AppConfig
 from translator import TranslationEngine, TranslationResult
 from ui_settings import SettingsDialog
 
 
 def create_app_icon() -> QIcon:
-    """Render a crisp vector-like tray/window icon in memory (no external .ico required)."""
+    """Load the custom transparent app icon (.ico/.png), with crisp vector fallback."""
+    for candidate in (
+        APP_DIR / "assets" / "app_icon.ico",
+        APP_DIR / "assets" / "app_icon.png",
+    ):
+        if candidate.exists():
+            icon = QIcon(str(candidate))
+            if not icon.isNull():
+                return icon
+
     pix = QPixmap(64, 64)
     pix.fill(Qt.GlobalColor.transparent)
     p = QPainter(pix)
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-    # Rounded indigo badge
-    path = QPainterPath()
-    path.addRoundedRect(QRectF(4, 4, 56, 56), 14, 14)
-    p.fillPath(path, QColor("#2563eb"))
+    # Fallback overlapping lavender + cyan rounded cards with 文 / A
+    card1 = QPainterPath()
+    card1.addRoundedRect(QRectF(4, 6, 38, 36), 10, 10)
+    p.fillPath(card1, QColor("#c7d2fe"))
+    p.setPen(QPen(QColor("#e0e7ff"), 1.5))
+    p.drawPath(card1)
 
-    # Stylized subtitle lines + translate symbol
-    p.setPen(QPen(QColor("#ffffff"), 4.2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
-    p.drawLine(16, 24, 48, 24)
-    p.setPen(QPen(QColor("#93c5fd"), 4.2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
-    p.drawLine(16, 36, 42, 36)
-    p.drawLine(16, 46, 32, 46)
+    card2 = QPainterPath()
+    card2.addRoundedRect(QRectF(22, 22, 38, 36), 10, 10)
+    p.fillPath(card2, QColor("#67e8f9"))
+    p.setPen(QPen(QColor("#cffafe"), 1.5))
+    p.drawPath(card2)
+
+    p.setPen(QColor("#1e293b"))
+    f1 = p.font()
+    f1.setBold(True)
+    f1.setPixelSize(20)
+    p.setFont(f1)
+    p.drawText(QRectF(4, 6, 38, 36), Qt.AlignmentFlag.AlignCenter, "文")
+    p.drawText(QRectF(22, 22, 38, 36), Qt.AlignmentFlag.AlignCenter, "A")
     p.end()
     return QIcon(pix)
 
@@ -84,7 +102,6 @@ class LevelMeterBar(QWidget):
         self.update()
 
     def set_level(self, channel_id: str, rms: float) -> None:
-        # Scale typical speech RMS (0.0 - 0.15) into 0.0 - 1.0 with slight smoothing
         norm = min(1.0, rms * 8.5)
         if channel_id == "system":
             self._sys_level = max(norm, self._sys_level * 0.65)
@@ -144,7 +161,6 @@ class SubtitleCard(QFrame):
         layout.setContentsMargins(10, 6, 10, 6)
         layout.setSpacing(3)
 
-        # Header meta row
         meta_row = QHBoxLayout()
         meta_row.setSpacing(6)
 
@@ -175,14 +191,12 @@ class SubtitleCard(QFrame):
         meta_row.addStretch(1)
         layout.addLayout(meta_row)
 
-        # Original speech line
         self.lbl_original = QLabel("")
         self.lbl_original.setWordWrap(True)
         self.lbl_original.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.lbl_original.setVisible(False)
         layout.addWidget(self.lbl_original)
 
-        # Translated subtitle line
         self.lbl_translation = QLabel("正在识别并翻译...")
         self.lbl_translation.setWordWrap(True)
         self.lbl_translation.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
@@ -282,7 +296,6 @@ class SubtitleOverlayWindow(QWidget):
         self._sync_quick_controls()
         self._update_background_style()
 
-        # Prompt user to configure API key on very first launch
         if not self._has_active_api_key():
             QTimer.singleShot(350, self._show_first_run_hint)
 
@@ -306,7 +319,6 @@ class SubtitleOverlayWindow(QWidget):
         main_layout.setContentsMargins(10, 8, 10, 6)
         main_layout.setSpacing(6)
 
-        # Top control bar (wrapped in a widget so Zen mode can hide everything cleanly)
         self.top_bar_widget = QWidget()
         self.top_bar_widget.setStyleSheet("background: transparent;")
         bar = QHBoxLayout(self.top_bar_widget)
@@ -409,11 +421,9 @@ class SubtitleOverlayWindow(QWidget):
 
         main_layout.addWidget(self.top_bar_widget)
 
-        # Live audio level bar
         self.level_bar = LevelMeterBar()
         main_layout.addWidget(self.level_bar)
 
-        # Scrollable subtitle feed
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -455,7 +465,6 @@ class SubtitleOverlayWindow(QWidget):
         self.scroll.setWidget(self.feed_widget)
         main_layout.addWidget(self.scroll, 1)
 
-        # Bottom subtle resize grip row
         self.grip_widget = QWidget()
         self.grip_widget.setStyleSheet("background: transparent;")
         grip_row = QHBoxLayout(self.grip_widget)
@@ -469,7 +478,6 @@ class SubtitleOverlayWindow(QWidget):
         grip_row.addWidget(self.size_grip)
         main_layout.addWidget(self.grip_widget)
 
-        # Floating top-right restore button shown ONLY in Zen (pure subtitle) mode
         self.btn_zen_restore = QPushButton("👁", self.container)
         self.btn_zen_restore.setObjectName("ZenRestoreBtn")
         self.btn_zen_restore.setFixedSize(28, 24)
@@ -540,7 +548,6 @@ class SubtitleOverlayWindow(QWidget):
                 y = max(geo.top(), min(self._cfg.window_y, geo.bottom() - 80))
                 self.move(x, y)
             else:
-                # Default: bottom-center of screen like classic live subtitles
                 x = geo.left() + (geo.width() - w) // 2
                 y = geo.bottom() - h - 36
                 self.move(x, max(geo.top(), y))
@@ -562,7 +569,7 @@ class SubtitleOverlayWindow(QWidget):
                 background-color: rgba(15, 19, 28, {alpha});
                 border: 1px solid rgba(148, 163, 184, 0.28);
                 border-radius: 12px;
-                font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif;
+                font-family: "PingFang SC", "Microsoft YaHei UI", "Segoe UI", sans-serif;
             }}
             QFrame#SubtitleCard {{
                 background-color: rgba(30, 38, 54, {card_alpha});
@@ -667,7 +674,6 @@ class SubtitleOverlayWindow(QWidget):
             }}
             """
         )
-        # Re-apply typography to existing cards
         for card in self._cards.values():
             if card.lbl_translation.text().startswith("⚠"):
                 card.apply_style(self._cfg.font_size, self._cfg.show_original, is_error=True)
@@ -752,7 +758,6 @@ class SubtitleOverlayWindow(QWidget):
         if dot_color:
             self.lbl_dot.setStyleSheet(f"color: {dot_color}; font-size: 13px;")
 
-    # --- Window dragging ---
     def mousePressEvent(self, event) -> None:
         if not self._locked_compact and event.button() == Qt.MouseButton.LeftButton:
             self._dragging = True
@@ -794,7 +799,6 @@ class SubtitleOverlayWindow(QWidget):
             return
         super().keyPressEvent(event)
 
-    # --- Quick controls ---
     def _apply_channel_mode(self, new_mode: str, *, auto_start: bool = False) -> None:
         self._cfg.audio_mode = new_mode
         self._cfg.save()
@@ -811,36 +815,28 @@ class SubtitleOverlayWindow(QWidget):
         running = self._capture.is_running
         mode = self._cfg.audio_mode
         if not running:
-            # One-click start system audio capture
             self._apply_channel_mode("system", auto_start=True)
             return
 
         if mode == "system":
-            # Only system was active -> stop capture
             self.stop_capture()
         elif mode == "both":
-            # Turn off system, keep mic running
             self._apply_channel_mode("mic")
         else:
-            # Currently mic-only -> add system channel (dual-channel)
             self._apply_channel_mode("both")
 
     def _on_toggle_mic_channel(self) -> None:
         running = self._capture.is_running
         mode = self._cfg.audio_mode
         if not running:
-            # One-click open microphone & start capturing immediately for offline chat
             self._apply_channel_mode("mic", auto_start=True)
             return
 
         if mode == "mic":
-            # Only mic was active -> stop capture
             self.stop_capture()
         elif mode == "both":
-            # Turn off mic, keep system audio running
             self._apply_channel_mode("system")
         else:
-            # Currently system-only -> add microphone channel (dual-channel)
             self._apply_channel_mode("both")
 
     def _on_quick_dir_changed(self) -> None:
@@ -961,7 +957,6 @@ class SubtitleOverlayWindow(QWidget):
             else:
                 self._show_from_tray()
 
-    # --- Audio capture & translation pipeline ---
     def toggle_capture(self) -> None:
         if self._capture.is_running:
             self.stop_capture()
@@ -1005,7 +1000,6 @@ class SubtitleOverlayWindow(QWidget):
         self._update_background_style()
         self._set_status("已停止", "#64748b")
 
-    # Background thread callbacks -> Qt signals
     def _on_audio_level(self, channel_id: str, rms: float) -> None:
         self.sig_level.emit(channel_id, rms)
 
@@ -1030,7 +1024,6 @@ class SubtitleOverlayWindow(QWidget):
         result = self._engine.translate_segment(seq_id, segment, cfg)
         self.sig_result.emit(result)
 
-    # GUI thread slots
     def _handle_level_ui(self, channel_id: str, rms: float) -> None:
         self.level_bar.set_level(channel_id, rms)
 
@@ -1060,13 +1053,11 @@ class SubtitleOverlayWindow(QWidget):
             show_original=self._cfg.show_original,
             parent=self.feed_widget,
         )
-        # Insert right before bottom stretch
         insert_idx = max(0, self.feed_layout.count() - 1)
         self.feed_layout.insertWidget(insert_idx, card)
         self._cards[seq_id] = card
         self._card_order.append(seq_id)
 
-        # Trim oldest cards beyond max_visible_items
         while len(self._card_order) > max(5, int(self._cfg.max_visible_items)):
             old_id = self._card_order.pop(0)
             old_card = self._cards.pop(old_id, None)
@@ -1082,7 +1073,6 @@ class SubtitleOverlayWindow(QWidget):
         was_bottom = self._is_near_bottom()
 
         if not result.speech_detected and not result.error:
-            # Remove placeholder for silence / background noise
             if card is not None:
                 self._cards.pop(result.seq_id, None)
                 if result.seq_id in self._card_order:
@@ -1114,7 +1104,6 @@ class SubtitleOverlayWindow(QWidget):
         if was_bottom:
             self._scroll_to_bottom()
 
-    # --- Settings, Clear, Export, Quit ---
     def open_settings(
         self, _checked: bool = False, *, initial_provider: str | None = None
     ) -> None:

@@ -1,6 +1,7 @@
 # Local user config & API keys (NEVER commit!)
 config.json
 python_path.txt
+.icon_source_path.txt
 .env
 .env.*
 *.local.*

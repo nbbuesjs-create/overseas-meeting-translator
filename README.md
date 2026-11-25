@@ -1,8 +1,8 @@
 # 🌐 海外会议翻译助手（Overseas Meeting Translator）
 
-> 一款专为 Windows 打造的**置顶半透明悬浮实时双语字幕工具**——零显卡要求、支持免费云端 API、国内直连与海外代理引擎一键秒切，轻松搞定**海外会议、国外朋友聊天、看无字幕外语影视剧/直播**。
+> 一款专为 **Windows & macOS** 打造的**置顶半透明悬浮实时双语字幕工具**——零显卡要求、支持免费云端 API、国内直连与海外代理引擎一键秒切，轻松搞定**海外会议、国外朋友聊天、看无字幕外语影视剧/直播**。
 
-[![Windows](https://img.shields.io/badge/Platform-Windows%2010%2F11-0078D6?logo=windows)](https://github.com/nbbuesjs-create/overseas-meeting-translator)
+[![Platform](https://img.shields.io/badge/Platform-Windows%2010%2F11%20%7C%20macOS-0078D6?logo=windows)](https://github.com/nbbuesjs-create/overseas-meeting-translator)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
@@ -31,10 +31,10 @@
 
 ## ✨ 核心亮点
 
-- **三模式灵活采集（基于 Windows WASAPI）**：
-  - `🔊 系统声音（WASAPI Loopback）`：直接抓取电脑播放通道声音，**戴耳机也能精准采集**，无需虚拟声卡、无需外放。
-  - `🎤 麦克风`：抓取本地麦克风与环境人声，适合线下会议或录音翻译。
-  - `🔊+🎤 双通道同时监听`：两路独立采集并分别标注 `[系统]` 与 `[麦克风]` 卡片。
+- **三模式灵活采集（跨平台支持 Windows & macOS）**：
+  - `🔊 系统声音`：Windows 基于原生 **WASAPI Loopback** 免虚拟声卡直接抓电脑声音（戴耳机也能精准采集）；macOS 配合免费开源虚拟声卡 **BlackHole 2ch** 同样支持系统内录。
+  - `🎤 麦克风`：Windows & macOS 均**开箱即用**，一键点亮即刻收音，适合线下与国外朋友/客户面对面交流。
+  - `🔊+🎤 双通道同时监听`：两个按钮同时点亮，独立识别并分别标注 `[系统]` 与 `[麦克风]` 卡片。
 - **双引擎独立代理 + 顶栏一键秒切**：
   - **国内免费直连（硅基流动 SiliconFlow）** 与 **海外引擎（Google Gemini / Groq / OpenAI）** 的 API Key 与代理相互独立保存。
   - **开着系统代理时切国内引擎也能自动绕过代理直连**，不绕弯、不卡顿；开会中途也能在顶栏一键切换，无需重启或重复配置。
@@ -44,7 +44,7 @@
   - 内置上下文记忆 + **自定义行业术语/会议背景**，专业缩写（ARR、SLA、FOB、MOQ 等）翻译更地道。
 - **顺手的桌面悬浮体验**：
   - 始终置顶、半透明暗色玻璃风格、自由拖拽移动与缩放、字号/透明度可调。
-  - 一键切换**双语对照 / 极简译文**、**紧凑锁定**防误触、任务栏托盘支持**鼠标穿透模式**。
+  - 一键切换**双语对照 / 极简译文**、**纯净字幕模式**、**紧凑锁定**防误触、任务栏托盘支持**鼠标穿透模式**。
   - 一键导出本场会议带时间戳的 **Markdown 双语记录**（保存于 `transcripts/` 目录）。
 
 ---
@@ -63,24 +63,32 @@
 
 ### 🖱️ 手动安装（3 分钟上手）
 
-#### 第一步：准备 Python 环境
-1. 确认电脑为 **Windows 10 / 11**，并已安装 **Python 3.10 ~ 3.12**（如已安装可跳过）。
-2. 未安装请前往官方下载页：[https://www.python.org/downloads/windows/](https://www.python.org/downloads/windows/)
-   - 下载 **Python 3.12.x** 的 `Windows installer (64-bit)`；
-   - **安装界面最底部务必勾选 `Add python.exe to PATH`**。
+#### Windows 用户
+1. 安装 **Python 3.10 ~ 3.12**：前往 [Python Windows 下载页](https://www.python.org/downloads/windows/)，安装时**务必勾选 `Add python.exe to PATH`**。
+2. 点击本仓库右上角绿色 **`Code`** → **`Download ZIP`** 解压到本地目录（或执行 `git clone https://github.com/nbbuesjs-create/overseas-meeting-translator.git`）。
+3. 双击 **`start.bat`** 自动建虚拟环境、装依赖并打开悬浮字幕窗。
+4. **（可选）添加到 Windows 开始菜单**：双击 **`install_shortcut.bat`**，即可生成专属透明图标并将「海外会议翻译助手」加入 Windows 开始菜单（右键可固定到开始屏幕或任务栏，以后启动无黑框）。
 
-#### 第二步：下载并一键启动
-1. 点击本仓库右上角绿色 **`Code`** → **`Download ZIP`** 解压到本地目录（或执行 `git clone https://github.com/nbbuesjs-create/overseas-meeting-translator.git`）。
-2. 双击目录中的 **`start.bat`**：
-   - 首次运行会自动在项目目录下创建独立的 `.venv` 虚拟环境并安装依赖（`PyQt6`、`PyAudioWPatch`、`numpy`、`requests`，默认优先走清华源加速）；
-   - 安装完成后自动弹出**悬浮字幕窗口**。
+> 💡 **便携版 Python 提示**：若 Python 未加入 PATH，可在项目根目录新建 `python_path.txt`，写入 `python.exe` 完整路径（如 `D:\Python312\python.exe`）后双击 `start.bat`。
 
-> 💡 **便携版 Python 用户提示**：如果你的 Python 未加入系统 PATH，可在项目根目录新建一个 `python_path.txt`，里面写入 `python.exe` 的完整路径（例如 `D:\Python312\python.exe`），再双击 `start.bat` 即可自动识别。
+#### 🍎 macOS 用户
+1. 确保已安装 **Python 3.10+**（推荐 `brew install python@3.12` 或前往 [python.org](https://www.python.org/downloads/macos/) 下载）。
+2. 下载解压本仓库后，在终端进入项目目录执行一键启动：
+   ```bash
+   chmod +x start_mac.command && ./start_mac.command
+   ```
+   （首次授权后，以后直接双击 `start_mac.command` 即可运行。）
+3. **macOS 音频说明**：
+   - **线下聊天（`🎤 麦克风`）**：开箱即用，首次点亮麦克风时允许系统权限即可。
+   - **抓取电脑系统声音（线上会议 / 看无字幕电影）**：由于 macOS 系统限制，需安装免费的开源虚拟声卡 **BlackHole 2ch**：
+     1. 终端安装：`brew install blackhole-2ch`（或前往 [BlackHole 官网](https://existential.audio/blackhole/) 下载安装包）；
+     2. 打开 macOS 自带的 **「音频 MIDI 设置」** → 点左下角 **`+`** → **创建多输出设备** → 同时勾选你的 **扬声器/耳机** 和 **BlackHole 2ch**；
+     3. 在 macOS 系统声音输出中选择该「多输出设备」，回到本软件点亮 **`🔊 系统`** 即可自动识别 `BlackHole 2ch`！
 
-#### 第三步：配置免费 API 并开始翻译
+#### 配置免费 API 并开始翻译
 1. 点击悬浮窗右上角 **`⚙`** 打开设置 → **「API 与引擎」**。
 2. 按下方教程申请并填入**免费 API Key**，点击 **`测试 API 连接`** 确认变绿后点击 **`保存并应用`**。
-3. 回到悬浮窗顶部，选好音频模式（看剧/线上会议选 `🔊 系统声音`，线下开会选 `🎤 麦克风`），点击 **`▶ 开始翻译`** 即可！
+3. 回到悬浮窗顶部，点亮 **`🔊 系统`**（线上会议/看剧）或 **`🎤 麦克风`**（线下聊天），即刻开始实时翻译！
 
 ---
 
@@ -146,7 +154,7 @@
   - **`纯净`（纯净字幕模式）**：一键隐藏窗口内所有按钮与文字提示，仅保留悬浮字幕和顶部音量电平条；再点右上角悬浮 `👁` 图标（或按 `Esc` / 右键托盘）即可恢复。
   - `🔓 / 🔒`：紧凑锁定模式，隐藏多余按钮并防止拖动误触。
 - **鼠标穿透（看电影/操作会议软件不遮挡）**：
-  - 右键点击 Windows 任务栏右下角的**蓝色字幕托盘图标** → 勾选 **「鼠标穿透模式」**，鼠标即可直接穿透字幕窗点击后方界面；再次右键托盘图标即可取消穿透。
+  - 右键点击任务栏/菜单栏的**托盘图标** → 勾选 **「鼠标穿透模式」**，鼠标即可直接穿透字幕窗点击后方界面；再次右键托盘图标即可取消穿透。
 - **提高专业词汇准确度**：
   - 在 `⚙` → **「翻译与显示」** → **「行业术语/背景」** 中输入你的产品名、客户公司名或行业缩写（例如 `SaaS, ARR, SLA, FOB, MOQ, SKU`），翻译准确度会大幅提升。
 
@@ -156,7 +164,8 @@
 
 1. **收不到系统声音（顶部电平条不跳动）**：
    - 确认目标软件（Zoom / 浏览器 / 播放器）正在发声且未静音。
-   - **蓝牙耳机用户注意**：加入会议时 Windows 可能自动切换到 `Hands-Free AG Audio` 通道；请在 `⚙` → **「音频与检测」** 中点击 **「刷新设备」**，手动选择当前实际出声的播放设备。
+   - **Windows 蓝牙耳机用户注意**：加入会议时 Windows 可能自动切换到 `Hands-Free AG Audio` 通道；请在 `⚙` → **「音频与检测」** 中点击 **「刷新设备」**，手动选择当前实际出声的播放设备。
+   - **macOS 用户注意**：请确认已安装 `BlackHole 2ch` 并在系统声音输出中选择了包含 `BlackHole 2ch` 的「多输出设备」。
 2. **线下开会背景噪音大导致误触发**：
    - 在 `⚙` → **「音频与检测」** 中适当调高 **触发阈值（VAD）**（如从 `0.012` 调到 `0.022 ~ 0.030`）。
 3. **Gemini 高峰期提示 `503` 拥堵或延迟偏高**：
