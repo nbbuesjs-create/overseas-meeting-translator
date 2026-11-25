@@ -49,15 +49,27 @@
 
 ---
 
-## 🚀 快速开始（3 分钟上手）
+## 🚀 快速开始
 
-### 第一步：准备 Python 环境
+### ⚡ AI 智能体一键部署（最省事 · 推荐）
+
+把下面这句话直接复制发给你的 AI 智能体（Antigravity、Codex、Claude Code、Cursor、WorkBuddy 等），全程自动帮你拉代码、装环境、查代理并跑起来：
+
+```text
+帮我拉取 https://github.com/nbbuesjs-create/overseas-meeting-translator 的最新源码放到本地（例如 D:\overseas-meeting-translator），自动配好 Python 3.10+ 环境与依赖并启动悬浮字幕窗口；同时帮我查询本机代理端口，引导我完成免费 API（国内直连硅基流动 SiliconFlow 或海外 Google Gemini）的配置与连接测试。全过程你盯着，遇到环境、编码、代理或音频设备问题直接修复，有必要的话顺手给项目提交 Issue 帮助优化兼容性。
+```
+
+> 你唯一需要准备的，是一个免费的 API Key（下方附 **硅基流动国内免代理免费 Key** 与 **Google Gemini 免费 Key** 官方申请网址，1 分钟即可领到）。
+
+### 🖱️ 手动安装（3 分钟上手）
+
+#### 第一步：准备 Python 环境
 1. 确认电脑为 **Windows 10 / 11**，并已安装 **Python 3.10 ~ 3.12**（如已安装可跳过）。
 2. 未安装请前往官方下载页：[https://www.python.org/downloads/windows/](https://www.python.org/downloads/windows/)
    - 下载 **Python 3.12.x** 的 `Windows installer (64-bit)`；
    - **安装界面最底部务必勾选 `Add python.exe to PATH`**。
 
-### 第二步：下载并一键启动
+#### 第二步：下载并一键启动
 1. 点击本仓库右上角绿色 **`Code`** → **`Download ZIP`** 解压到本地目录（或执行 `git clone https://github.com/nbbuesjs-create/overseas-meeting-translator.git`）。
 2. 双击目录中的 **`start.bat`**：
    - 首次运行会自动在项目目录下创建独立的 `.venv` 虚拟环境并安装依赖（`PyQt6`、`PyAudioWPatch`、`numpy`、`requests`，默认优先走清华源加速）；
@@ -65,7 +77,7 @@
 
 > 💡 **便携版 Python 用户提示**：如果你的 Python 未加入系统 PATH，可在项目根目录新建一个 `python_path.txt`，里面写入 `python.exe` 的完整路径（例如 `D:\Python312\python.exe`），再双击 `start.bat` 即可自动识别。
 
-### 第三步：配置免费 API 并开始翻译
+#### 第三步：配置免费 API 并开始翻译
 1. 点击悬浮窗右上角 **`⚙`** 打开设置 → **「API 与引擎」**。
 2. 按下方教程申请并填入**免费 API Key**，点击 **`测试 API 连接`** 确认变绿后点击 **`保存并应用`**。
 3. 回到悬浮窗顶部，选好音频模式（看剧/线上会议选 `🔊 系统声音`，线下开会选 `🎤 麦克风`），点击 **`▶ 开始翻译`** 即可！
