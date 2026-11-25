@@ -1,0 +1,96 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="330" viewBox="0 0 960 330">
+  <defs>
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0b1220"/>
+      <stop offset="50%" stop-color="#111a2e"/>
+      <stop offset="100%" stop-color="#0f172a"/>
+    </linearGradient>
+    <linearGradient id="meterSys" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#38bdf8"/>
+      <stop offset="100%" stop-color="#60a5fa"/>
+    </linearGradient>
+    <linearGradient id="meterMic" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#34d399"/>
+      <stop offset="100%" stop-color="#4ade80"/>
+    </linearGradient>
+    <filter id="shadow" x="-5%" y="-10%" width="110%" height="125%">
+      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#000000" flood-opacity="0.45"/>
+    </filter>
+  </defs>
+
+  <rect width="960" height="330" rx="16" fill="url(#bgGrad)"/>
+  <circle cx="140" cy="60" r="120" fill="#2563eb" opacity="0.08"/>
+  <circle cx="820" cy="280" r="140" fill="#06b6d4" opacity="0.07"/>
+
+  <g filter="url(#shadow)">
+    <rect x="24" y="20" width="912" height="290" rx="14" fill="#0f172a" fill-opacity="0.94" stroke="#334155" stroke-width="1.2"/>
+  </g>
+
+  <g font-family="Microsoft YaHei UI, PingFang SC, Segoe UI, sans-serif" font-size="12">
+    <circle cx="42" cy="44" r="4.5" fill="#22c55e"/>
+    <rect x="56" y="30" width="92" height="28" rx="6" fill="#dc2626" stroke="#ef4444" stroke-width="1"/>
+    <text x="102" y="48" fill="#ffffff" font-weight="bold" text-anchor="middle">⏹ 停止翻译</text>
+
+    <rect x="156" y="30" width="112" height="28" rx="6" fill="#1e293b" stroke="#475569" stroke-width="1"/>
+    <text x="166" y="48" fill="#e2e8f0">🔊+🎤 双通道</text>
+    <text x="255" y="48" fill="#94a3b8" font-size="10">▾</text>
+
+    <rect x="275" y="30" width="84" height="28" rx="6" fill="#1e293b" stroke="#475569" stroke-width="1"/>
+    <text x="285" y="48" fill="#e2e8f0">中英互译</text>
+    <text x="346" y="48" fill="#94a3b8" font-size="10">▾</text>
+
+    <rect x="366" y="30" width="128" height="28" rx="6" fill="#1e293b" stroke="#3b82f6" stroke-width="1"/>
+    <text x="376" y="48" fill="#bfdbfe">🇨🇳 硅基流动·直连</text>
+    <text x="481" y="48" fill="#93c5fd" font-size="10">▾</text>
+
+    <text x="506" y="48" fill="#94a3b8" font-size="11.5">实时翻译中 · 延迟 1.4s</text>
+
+    <rect x="668" y="30" width="46" height="28" rx="6" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+    <text x="691" y="48" fill="#e2e8f0" text-anchor="middle">双语</text>
+
+    <rect x="720" y="30" width="46" height="28" rx="6" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+    <text x="743" y="48" fill="#e2e8f0" text-anchor="middle">导出</text>
+
+    <rect x="772" y="30" width="46" height="28" rx="6" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+    <text x="795" y="48" fill="#e2e8f0" text-anchor="middle">清屏</text>
+
+    <rect x="824" y="30" width="32" height="28" rx="6" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+    <text x="840" y="48" fill="#e2e8f0" text-anchor="middle">🔓</text>
+
+    <rect x="862" y="30" width="32" height="28" rx="6" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+    <text x="878" y="48" fill="#e2e8f0" text-anchor="middle">⚙</text>
+
+    <rect x="900" y="30" width="24" height="28" rx="6" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+    <text x="912" y="48" fill="#cbd5e1" text-anchor="middle">✕</text>
+  </g>
+
+  <rect x="36" y="66" width="438" height="5" rx="2.5" fill="#1e293b"/>
+  <rect x="36" y="66" width="318" height="5" rx="2.5" fill="url(#meterSys)"/>
+  <rect x="484" y="66" width="440" height="5" rx="2.5" fill="#1e293b"/>
+  <rect x="484" y="66" width="210" height="5" rx="2.5" fill="url(#meterMic)"/>
+
+  <g font-family="Microsoft YaHei UI, PingFang SC, Segoe UI, sans-serif">
+    <rect x="36" y="82" width="888" height="94" rx="10" fill="#162033" stroke="#26354d" stroke-width="1"/>
+    <rect x="48" y="92" width="54" height="20" rx="4" fill="#0284c7"/>
+    <text x="75" y="106" fill="#ffffff" font-size="11" font-weight="bold" text-anchor="middle">🔊 系统</text>
+    <rect x="108" y="92" width="30" height="20" rx="4" fill="#334155"/>
+    <text x="123" y="106" fill="#cbd5e1" font-size="11" font-weight="bold" text-anchor="middle">EN</text>
+    <text x="148" y="106" fill="#94a3b8" font-size="11.5">14:22:08  ·  1.4s</text>
+    <text x="48" y="132" fill="#94a3b8" font-size="13">Could we finalize the Q4 delivery schedule and SLA terms before Friday's kickoff call?</text>
+    <text x="48" y="160" fill="#f8fafc" font-size="17" font-weight="bold">我们能在周五的启动会之前，最终敲定第四季度的交付计划和 SLA 条款吗？</text>
+  </g>
+
+  <g font-family="Microsoft YaHei UI, PingFang SC, Segoe UI, sans-serif">
+    <rect x="36" y="186" width="888" height="94" rx="10" fill="#132629" stroke="#1f4347" stroke-width="1"/>
+    <rect x="48" y="196" width="64" height="20" rx="4" fill="#059669"/>
+    <text x="80" y="210" fill="#ffffff" font-size="11" font-weight="bold" text-anchor="middle">🎤 麦克风</text>
+    <rect x="118" y="196" width="30" height="20" rx="4" fill="#334155"/>
+    <text x="133" y="210" fill="#cbd5e1" font-size="11" font-weight="bold" text-anchor="middle">ZH</text>
+    <text x="158" y="210" fill="#94a3b8" font-size="11.5">14:22:15  ·  1.3s</text>
+    <text x="48" y="236" fill="#94a3b8" font-size="13">没问题，我们今天下午会把更新后的排期和报价发到您邮箱。</text>
+    <text x="48" y="264" fill="#ecfdf5" font-size="16.5" font-weight="bold">No problem, we will email you the updated schedule and quotation this afternoon.</text>
+  </g>
+
+  <text x="38" y="298" fill="#64748b" font-family="Microsoft YaHei UI, PingFang SC, Segoe UI, sans-serif" font-size="10.5">右下角可拖拽调整悬浮窗大小 · 托盘图标支持开启鼠标穿透 · 顶栏一键秒切国内直连 / 海外代理引擎</text>
+  <path d="M920 301 L927 294 M924 301 L927 298" stroke="#64748b" stroke-width="1.3" stroke-linecap="round"/>
+</svg>
