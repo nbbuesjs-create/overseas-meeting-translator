@@ -319,16 +319,17 @@ class SubtitleOverlayWindow(QWidget):
         self.btn_toggle.clicked.connect(self.toggle_capture)
         bar.addWidget(self.btn_toggle)
 
-        self.cmb_quick_audio = QComboBox()
-        self.cmb_quick_audio.setToolTip("快速切换采集通道（系统声音 / 麦克风 / 双通道）")
-        for code, label in (
-            ("system", "🔊 系统声音"),
-            ("mic", "🎤 麦克风"),
-            ("both", "🔊+🎤 双通道"),
-        ):
-            self.cmb_quick_audio.addItem(label, code)
-        self.cmb_quick_audio.currentIndexChanged.connect(self._on_quick_audio_changed)
-        bar.addWidget(self.cmb_quick_audio)
+        self.btn_sys_audio = QPushButton("🔊 系统")
+        self.btn_sys_audio.setToolTip("一键开启 / 关闭电脑系统声音采集（线上会议、电影、网页音频）")
+        self.btn_sys_audio.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_sys_audio.clicked.connect(self._on_toggle_system_channel)
+        bar.addWidget(self.btn_sys_audio)
+
+        self.btn_mic_audio = QPushButton("🎤 麦克风")
+        self.btn_mic_audio.setToolTip("一键开启 / 关闭麦克风收音（线下聊天/面对面交流点一下即刻收音，也可与系统声音同时开启）")
+        self.btn_mic_audio.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_mic_audio.clicked.connect(self._on_toggle_mic_channel)
+        bar.addWidget(self.btn_mic_audio)
 
         self.cmb_quick_dir = QComboBox()
         self.cmb_quick_dir.setToolTip("快速切换翻译方向")
@@ -430,10 +431,10 @@ class SubtitleOverlayWindow(QWidget):
         self.feed_layout.setSpacing(6)
 
         self.lbl_empty = QLabel(
-            "点击上方「▶ 开始翻译」即可实时捕获会议语音并翻译。\n"
-            "• 线上会议（Zoom / Teams / Meet）：选择「🔊 系统声音」\n"
-            "• 线下会议（面对面交流）：选择「🎤 麦克风」\n"
-            "• 同时翻译对方与自己：选择「🔊+🎤 双通道」"
+            "点击上方「🔊 系统」或「🎤 麦克风」即可一键收音并实时翻译：\n"
+            "• 线上会议 / 看外语剧：点亮「🔊 系统」抓取电脑声道\n"
+            "• 线下聊天 / 面对面交流：直接点「🎤 麦克风」立即开麦收音\n"
+            "• 同时翻译对方与自己：两个按钮同时点亮即可双通道收音"
         )
         self.lbl_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.lbl_empty.setStyleSheet("color: #94a3b8; font-size: 13px; padding: 24px 14px;")
@@ -572,6 +573,45 @@ class SubtitleOverlayWindow(QWidget):
             QPushButton#StopBtn:hover {{
                 background-color: #ef4444;
             }}
+            QPushButton#SysActiveBtn {{
+                background-color: #0284c7;
+                border: 1px solid #38bdf8;
+                color: #ffffff;
+                font-weight: bold;
+                padding: 4px 10px;
+            }}
+            QPushButton#SysActiveBtn:hover {{
+                background-color: #0369a1;
+            }}
+            QPushButton#MicActiveBtn {{
+                background-color: #059669;
+                border: 1px solid #34d399;
+                color: #ffffff;
+                font-weight: bold;
+                padding: 4px 10px;
+            }}
+            QPushButton#MicActiveBtn:hover {{
+                background-color: #047857;
+            }}
+            QPushButton#ChanStandbyBtn {{
+                background-color: rgba(30, 41, 59, 0.9);
+                border: 1px solid rgba(96, 165, 250, 0.55);
+                color: #e2e8f0;
+                padding: 4px 10px;
+            }}
+            QPushButton#ChanStandbyBtn:hover {{
+                background-color: rgba(51, 65, 85, 0.95);
+            }}
+            QPushButton#ChanIdleBtn {{
+                background-color: rgba(30, 41, 59, 0.65);
+                border: 1px solid rgba(148, 163, 184, 0.22);
+                color: #94a3b8;
+                padding: 4px 10px;
+            }}
+            QPushButton#ChanIdleBtn:hover {{
+                background-color: rgba(51, 65, 85, 0.85);
+                color: #e2e8f0;
+            }}
             QComboBox {{
                 background-color: rgba(30, 41, 59, 0.85);
                 color: #e2e8f0;
@@ -596,12 +636,39 @@ class SubtitleOverlayWindow(QWidget):
             else:
                 card.apply_style(self._cfg.font_size, self._cfg.show_original, is_pending=False)
 
+    def _refresh_channel_buttons(self) -> None:
+        running = self._capture.is_running
+        sys_on = self._cfg.audio_mode in ("system", "both")
+        mic_on = self._cfg.audio_mode in ("mic", "both")
+
+        if running and sys_on:
+            self.btn_sys_audio.setText("🔊 系统·开")
+            self.btn_sys_audio.setObjectName("SysActiveBtn")
+        elif sys_on:
+            self.btn_sys_audio.setText("🔊 系统")
+            self.btn_sys_audio.setObjectName("ChanStandbyBtn")
+        else:
+            self.btn_sys_audio.setText("🔊 系统")
+            self.btn_sys_audio.setObjectName("ChanIdleBtn")
+
+        if running and mic_on:
+            self.btn_mic_audio.setText("🎤 麦已开")
+            self.btn_mic_audio.setObjectName("MicActiveBtn")
+        elif mic_on:
+            self.btn_mic_audio.setText("🎤 麦克风")
+            self.btn_mic_audio.setObjectName("ChanStandbyBtn")
+        else:
+            self.btn_mic_audio.setText("🎤 麦克风")
+            self.btn_mic_audio.setObjectName("ChanIdleBtn")
+
+        for btn in (self.btn_sys_audio, self.btn_mic_audio):
+            style = btn.style()
+            if style is not None:
+                style.unpolish(btn)
+                style.polish(btn)
+
     def _sync_quick_controls(self) -> None:
-        self.cmb_quick_audio.blockSignals(True)
-        idx = self.cmb_quick_audio.findData(self._cfg.audio_mode)
-        if idx >= 0:
-            self.cmb_quick_audio.setCurrentIndex(idx)
-        self.cmb_quick_audio.blockSignals(False)
+        self._refresh_channel_buttons()
 
         self.cmb_quick_dir.blockSignals(True)
         idx = self.cmb_quick_dir.findData(self._cfg.direction)
@@ -670,16 +737,53 @@ class SubtitleOverlayWindow(QWidget):
         super().mouseReleaseEvent(event)
 
     # --- Quick controls ---
-    def _on_quick_audio_changed(self) -> None:
-        new_mode = str(self.cmb_quick_audio.currentData() or "system")
-        if new_mode == self._cfg.audio_mode:
-            return
+    def _apply_channel_mode(self, new_mode: str, *, auto_start: bool = False) -> None:
         self._cfg.audio_mode = new_mode
         self._cfg.save()
         self.level_bar.set_mode(new_mode)
         if self._capture.is_running:
             self.stop_capture()
             self.start_capture()
+        elif auto_start:
+            self.start_capture()
+        else:
+            self._refresh_channel_buttons()
+
+    def _on_toggle_system_channel(self) -> None:
+        running = self._capture.is_running
+        mode = self._cfg.audio_mode
+        if not running:
+            # One-click start system audio capture
+            self._apply_channel_mode("system", auto_start=True)
+            return
+
+        if mode == "system":
+            # Only system was active -> stop capture
+            self.stop_capture()
+        elif mode == "both":
+            # Turn off system, keep mic running
+            self._apply_channel_mode("mic")
+        else:
+            # Currently mic-only -> add system channel (dual-channel)
+            self._apply_channel_mode("both")
+
+    def _on_toggle_mic_channel(self) -> None:
+        running = self._capture.is_running
+        mode = self._cfg.audio_mode
+        if not running:
+            # One-click open microphone & start capturing immediately for offline chat
+            self._apply_channel_mode("mic", auto_start=True)
+            return
+
+        if mode == "mic":
+            # Only mic was active -> stop capture
+            self.stop_capture()
+        elif mode == "both":
+            # Turn off mic, keep system audio running
+            self._apply_channel_mode("system")
+        else:
+            # Currently system-only -> add microphone channel (dual-channel)
+            self._apply_channel_mode("both")
 
     def _on_quick_dir_changed(self) -> None:
         new_dir = str(self.cmb_quick_dir.currentData() or "auto_to_zh")
@@ -728,7 +832,8 @@ class SubtitleOverlayWindow(QWidget):
         self._locked_compact = not self._locked_compact
         self.btn_lock.setText("🔒" if self._locked_compact else "🔓")
         show_extra = not self._locked_compact
-        self.cmb_quick_audio.setVisible(show_extra)
+        self.btn_sys_audio.setVisible(show_extra)
+        self.btn_mic_audio.setVisible(show_extra)
         self.cmb_quick_dir.setVisible(show_extra)
         self.cmb_quick_engine.setVisible(show_extra)
         self.btn_bilingual.setVisible(show_extra)
@@ -796,12 +901,14 @@ class SubtitleOverlayWindow(QWidget):
         try:
             active_devs = self._capture.start(self._cfg)
         except Exception as exc:
+            self._refresh_channel_buttons()
             self._set_status(f"启动失败: {exc}", "#ef4444")
             QMessageBox.warning(self, "无法启动音频采集", str(exc))
             return
 
         self.btn_toggle.setText("⏹ 停止翻译")
         self.btn_toggle.setObjectName("StopBtn")
+        self._refresh_channel_buttons()
         self._update_background_style()
         summary = " | ".join(active_devs)
         if len(summary) > 54:
@@ -813,6 +920,7 @@ class SubtitleOverlayWindow(QWidget):
         self.level_bar.reset()
         self.btn_toggle.setText("▶ 开始翻译")
         self.btn_toggle.setObjectName("StartBtn")
+        self._refresh_channel_buttons()
         self._update_background_style()
         self._set_status("已停止", "#64748b")
 
