@@ -1,0 +1,29 @@
+# Local user config & API keys (NEVER commit!)
+config.json
+python_path.txt
+.env
+.env.*
+*.local.*
+
+# Python virtual environment & caches
+.venv/
+venv/
+.pip_cache/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Runtime logs & exported meeting transcripts
+transcripts/
+*.log
+error.log
+
+# Local GitHub publish helper (kept local only)
+publish_to_github.bat
+publish_to_github.ps1
+
+# IDE / OS metadata
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
