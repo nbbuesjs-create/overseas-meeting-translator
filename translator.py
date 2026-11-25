@@ -124,6 +124,17 @@ def _post_with_retry(
     return last_resp
 
 
+def _is_predominantly_chinese(text: str) -> bool:
+    """Return True if the utterance is mainly Chinese (including mixed Chinese + acronyms)."""
+    cjk = len(re.findall(r"[\u4e00-\u9fff]", text))
+    latin = len(re.findall(r"[A-Za-z]", text))
+    if cjk == 0:
+        return False
+    if latin == 0:
+        return True
+    return cjk * 3 >= latin
+
+
 def _direction_instruction(direction: str) -> str:
     mapping = {
         "auto_to_zh": (
@@ -133,22 +144,26 @@ def _direction_instruction(direction: str) -> str:
             "provide a clean, concise Simplified Chinese subtitle in `translation`."
         ),
         "bi_en_zh": (
-            "Auto-detect whether the speaker is speaking Chinese or a foreign language (especially English). "
-            "If the speaker is speaking English or any non-Chinese language, translate into natural, "
-            "fluent Simplified Chinese. "
-            "If the speaker is speaking Chinese, translate into natural, professional business English."
+            "STRICT BIDIRECTIONAL TRANSLATION (ZH <-> EN):\n"
+            "- First transcribe the exact spoken words in `original` and detect the language.\n"
+            "- If the speaker is speaking CHINESE (Mandarin/Cantonese, even with a few English acronyms): "
+            "set `source_lang` to \"ZH\" and YOU MUST translate the full meaning into natural, idiomatic English in `translation`. "
+            "NEVER leave `translation` in Chinese when `original` is Chinese!\n"
+            "- If the speaker is speaking ENGLISH or any other non-Chinese language: "
+            "set `source_lang` to \"EN\" (or its ISO code) and YOU MUST translate into natural, fluent Simplified Chinese in `translation`."
         ),
         "en_to_zh": (
             "The speaker is primarily speaking English. Transcribe accurately in English in `original`, "
             "and translate into natural, concise business Simplified Chinese in `translation`."
         ),
         "zh_to_en": (
-            "The speaker is primarily speaking Chinese. Transcribe accurately in Chinese in `original`, "
-            "and translate into natural, professional business English in `translation`."
+            "The speaker is speaking Chinese. Transcribe accurately in Simplified Chinese in `original`, "
+            "and YOU MUST translate into natural, idiomatic English in `translation`. "
+            "NEVER output Chinese characters in `translation`."
         ),
         "auto_to_en": (
             "Auto-detect the spoken language. Transcribe the exact spoken words in `original`, "
-            "and translate into natural, professional business English in `translation`."
+            "and YOU MUST translate into natural, idiomatic English in `translation`."
         ),
     }
     return mapping.get(direction, mapping["auto_to_zh"])
@@ -222,7 +237,10 @@ class TranslationEngine:
         with self._ctx_lock:
             self._recent_context.append((original.strip(), translation.strip()))
 
-    def _build_system_prompt(self, cfg: AppConfig, for_audio: bool) -> str:
+    def _build_system_prompt(
+        self, cfg: AppConfig, for_audio: bool, direction_override: str | None = None
+    ) -> str:
+        direction = direction_override or cfg.direction
         glossary_block = ""
         if cfg.glossary.strip():
             glossary_block = (
@@ -233,7 +251,7 @@ class TranslationEngine:
         if for_audio:
             return (
                 "You are a real-time simultaneous interpreter for international business meetings.\n"
-                f"{_direction_instruction(cfg.direction)}\n"
+                f"{_direction_instruction(direction)}\n"
                 f"{glossary_block}"
                 "Rules:\n"
                 "1. If the audio contains only silence, keyboard noise, coughing, music, or unintelligible noise with no human speech, "
@@ -247,7 +265,7 @@ class TranslationEngine:
 
         return (
             "You are a real-time simultaneous interpreter for international business meetings.\n"
-            f"{_direction_instruction(cfg.direction)}\n"
+            f"{_direction_instruction(direction)}\n"
             f"{glossary_block}"
             "Rules:\n"
             "1. Keep the translation concise, idiomatic, and immediately readable as live subtitles.\n"
@@ -255,6 +273,50 @@ class TranslationEngine:
             '3. Output ONLY a valid JSON object with keys: `source_lang` (short code like "EN", "ZH", "JA"), '
             "`translation` (string)."
         )
+
+    def _gemini_force_translate_text(
+        self, text: str, target_lang: str, cfg: AppConfig
+    ) -> str:
+        """Fast text-only safety-net translation if audio model echoed the source language."""
+        api_key = cfg.gemini_api_key.strip()
+        base_url = cfg.gemini_base_url.strip().rstrip("/") or "https://generativelanguage.googleapis.com"
+        model = cfg.gemini_model.strip() or "gemini-3.8-flash"
+        url = f"{base_url}/v1beta/models/{model}:generateContent"
+
+        gen_cfg: dict = {"temperature": 0.1, "maxOutputTokens": 256}
+        if model.lower().startswith("gemini-3"):
+            gen_cfg["thinkingConfig"] = {"thinkingLevel": "low"}
+
+        prompt = (
+            f"Translate the following spoken sentence into natural, concise {target_lang}. "
+            f"Output ONLY the {target_lang} translation, nothing else.\n\n{text}"
+        )
+        payload = {
+            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "generationConfig": gen_cfg,
+        }
+        try:
+            resp = _post_with_retry(
+                url,
+                headers={"Content-Type": "application/json", "x-goog-api-key": api_key},
+                json_body=payload,
+                proxies=_build_proxies(cfg),
+                timeout=cfg.request_timeout,
+                max_retries=1,
+            )
+            if resp.status_code != 200:
+                return ""
+            data = resp.json()
+            candidates = data.get("candidates") or []
+            if not candidates:
+                return ""
+            parts = candidates[0].get("content", {}).get("parts") or []
+            out = "".join(
+                p.get("text", "") for p in parts if isinstance(p, dict) and not p.get("thought")
+            ).strip()
+            return out.strip('"').strip()
+        except Exception:
+            return ""
 
     def translate_segment(self, seq_id: int, segment: AudioSegment, cfg: AppConfig) -> TranslationResult:
         t0 = time.monotonic()
@@ -397,12 +459,30 @@ class TranslationEngine:
                 speech_detected=False,
             )
 
+        # Safety net: if bidirectional/zh_to_en echoed Chinese instead of translating to English
+        orig_is_zh = _is_predominantly_chinese(original)
+        trans_is_zh = _is_predominantly_chinese(translation) if translation else orig_is_zh
+        if cfg.direction in ("bi_en_zh", "zh_to_en", "auto_to_en") and orig_is_zh and trans_is_zh:
+            fixed = self._gemini_force_translate_text(original, "English", cfg)
+            if fixed:
+                translation = fixed
+                source_lang = "ZH"
+        elif (
+            cfg.direction in ("bi_en_zh", "en_to_zh", "auto_to_zh")
+            and not orig_is_zh
+            and not trans_is_zh
+            and len(original) >= 6
+        ):
+            fixed = self._gemini_force_translate_text(original, "Simplified Chinese", cfg)
+            if fixed:
+                translation = fixed
+
         return TranslationResult(
             seq_id=seq_id,
             channel_id=segment.channel_id,
             channel_label=segment.channel_label,
             timestamp=segment.timestamp,
-            source_lang=source_lang or "AUTO",
+            source_lang=source_lang or ("ZH" if orig_is_zh else "AUTO"),
             original=original,
             translation=translation or original,
             speech_detected=True,
@@ -480,12 +560,13 @@ class TranslationEngine:
                 speech_detected=False,
             )
 
+        orig_is_zh = _is_predominantly_chinese(original)
         return TranslationResult(
             seq_id=seq_id,
             channel_id=segment.channel_id,
             channel_label=segment.channel_label,
             timestamp=segment.timestamp,
-            source_lang=source_lang or "AUTO",
+            source_lang=source_lang or ("ZH" if orig_is_zh else "AUTO"),
             original=original,
             translation=translation or original,
             speech_detected=True,
@@ -549,20 +630,45 @@ class TranslationEngine:
             llm_base = stt_base
             llm_model = cfg.openai_llm_model.strip() or "gpt-4o-mini"
 
+        # Resolve explicit target direction for bi_en_zh using deterministic CJK detection
+        effective_dir = cfg.direction
+        orig_is_zh = _is_predominantly_chinese(original)
+        if cfg.direction == "bi_en_zh":
+            effective_dir = "zh_to_en" if orig_is_zh else "auto_to_zh"
+
+        glossary_note = (
+            f"\nTerminology / context to respect: {cfg.glossary.strip()}"
+            if cfg.glossary.strip()
+            else ""
+        )
         context_block = self._get_context_block(cfg.context_turns)
-        user_msg = (
-            f"{context_block}\n\n"
-            f"Current utterance to translate:\n{original}\n\n"
-            "Return ONLY a JSON object with `source_lang` and `translation`."
-        ).strip()
+        ctx_prefix = f"{context_block}\n\n" if context_block else ""
+
+        if effective_dir in ("zh_to_en", "auto_to_en"):
+            sys_prompt = (
+                "You are a real-time simultaneous interpreter. "
+                "Translate the user's Chinese text into natural, concise, idiomatic English. "
+                "Output ONLY the English translation text — no explanations, no quotes, no JSON, "
+                f"and NEVER output Chinese characters.{glossary_note}"
+            )
+            user_msg = f"{ctx_prefix}Translate the following sentence into English:\n{original}"
+            source_lang = "ZH" if orig_is_zh else "AUTO"
+        else:
+            sys_prompt = (
+                "你是一名专业的实时同声传译员。"
+                "将用户输入的句子翻译为自然、简洁、通顺的简体中文。"
+                "只输出中文译文，不要解释、不要加引号、不要输出 JSON 或原文。"
+                f"{glossary_note}"
+            )
+            user_msg = f"{ctx_prefix}请将下面这句话翻译为简体中文：\n{original}"
+            source_lang = "EN" if effective_dir == "en_to_zh" else ("ZH" if orig_is_zh else "AUTO")
 
         llm_url = f"{llm_base}/chat/completions"
         payload = {
             "model": llm_model,
             "temperature": 0.1,
-            "response_format": {"type": "json_object"},
             "messages": [
-                {"role": "system", "content": self._build_system_prompt(cfg, for_audio=False)},
+                {"role": "system", "content": sys_prompt},
                 {"role": "user", "content": user_msg},
             ],
         }
@@ -578,36 +684,49 @@ class TranslationEngine:
             timeout=cfg.request_timeout,
         )
 
-        # Fallback without response_format for providers that don't support json_object
-        if llm_resp.status_code == 400 and "response_format" in llm_resp.text.lower():
-            payload.pop("response_format", None)
-            llm_resp = _post_with_retry(
-                llm_url,
-                headers={
-                    "Authorization": f"Bearer {llm_key}",
-                    "Content-Type": "application/json",
-                },
-                json_body=payload,
-                proxies=proxies,
-                timeout=cfg.request_timeout,
-            )
-
         if llm_resp.status_code != 200:
             detail = _extract_http_error(llm_resp)
             raise RuntimeError(f"翻译 LLM 错误 ({llm_resp.status_code}): {detail}")
 
         llm_data = llm_resp.json()
-        content = str(llm_data["choices"][0]["message"]["content"]).strip()
+        translation = str(llm_data["choices"][0]["message"]["content"]).strip().strip('"').strip()
 
-        source_lang = "AUTO"
-        translation = content
-        try:
-            parsed = _extract_json_object(content)
-            source_lang = str(parsed.get("source_lang", "AUTO")).strip().upper()[:8] or "AUTO"
-            translation = str(parsed.get("translation", "")).strip() or original
-        except Exception:
-            # If the LLM returned plain text translation, still show it gracefully
-            translation = content
+        # Safety net: if zh_to_en still echoed Chinese (e.g. small 7B model), retry with a bare prompt
+        if effective_dir in ("zh_to_en", "auto_to_en") and _is_predominantly_chinese(translation):
+            retry_payload = {
+                "model": llm_model,
+                "temperature": 0.1,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": (
+                            "Translate the following Chinese sentence into English. "
+                            "Reply with the English translation ONLY:\n\n"
+                            f"{original}"
+                        ),
+                    }
+                ],
+            }
+            retry_resp = _post_with_retry(
+                llm_url,
+                headers={
+                    "Authorization": f"Bearer {llm_key}",
+                    "Content-Type": "application/json",
+                },
+                json_body=retry_payload,
+                proxies=proxies,
+                timeout=cfg.request_timeout,
+                max_retries=1,
+            )
+            if retry_resp.status_code == 200:
+                retry_txt = (
+                    str(retry_resp.json()["choices"][0]["message"]["content"])
+                    .strip()
+                    .strip('"')
+                    .strip()
+                )
+                if retry_txt and not _is_predominantly_chinese(retry_txt):
+                    translation = retry_txt
 
         return TranslationResult(
             seq_id=seq_id,
@@ -616,7 +735,7 @@ class TranslationEngine:
             timestamp=segment.timestamp,
             source_lang=source_lang,
             original=original,
-            translation=translation,
+            translation=translation or original,
             speech_detected=True,
         )
 

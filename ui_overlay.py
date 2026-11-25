@@ -249,6 +249,7 @@ class SubtitleOverlayWindow(QWidget):
         self._dragging = False
         self._drag_offset = QPoint()
         self._locked_compact = False
+        self._zen_mode = False
         self._click_through = False
         self._seq_counter = 0
 
@@ -305,8 +306,11 @@ class SubtitleOverlayWindow(QWidget):
         main_layout.setContentsMargins(10, 8, 10, 6)
         main_layout.setSpacing(6)
 
-        # Top control bar
-        bar = QHBoxLayout()
+        # Top control bar (wrapped in a widget so Zen mode can hide everything cleanly)
+        self.top_bar_widget = QWidget()
+        self.top_bar_widget.setStyleSheet("background: transparent;")
+        bar = QHBoxLayout(self.top_bar_widget)
+        bar.setContentsMargins(0, 0, 0, 0)
         bar.setSpacing(6)
 
         self.lbl_dot = QLabel("●")
@@ -372,6 +376,13 @@ class SubtitleOverlayWindow(QWidget):
         self.btn_clear.clicked.connect(self.clear_subtitles)
         bar.addWidget(self.btn_clear)
 
+        self.btn_zen = QPushButton("纯净")
+        self.btn_zen.setToolTip("纯净字幕模式（隐藏窗口内所有按钮和提示，仅保留翻译内容；再点右上角按钮可恢复）")
+        self.btn_zen.setFixedWidth(48)
+        self.btn_zen.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_zen.clicked.connect(self._toggle_zen_mode)
+        bar.addWidget(self.btn_zen)
+
         self.btn_lock = QPushButton("🔓")
         self.btn_lock.setToolTip("切换紧凑锁定模式（隐藏多余按钮、防止误拖动）")
         self.btn_lock.setFixedWidth(34)
@@ -396,7 +407,7 @@ class SubtitleOverlayWindow(QWidget):
         self.btn_close.clicked.connect(self.quit_app)
         bar.addWidget(self.btn_close)
 
-        main_layout.addLayout(bar)
+        main_layout.addWidget(self.top_bar_widget)
 
         # Live audio level bar
         self.level_bar = LevelMeterBar()
@@ -445,7 +456,9 @@ class SubtitleOverlayWindow(QWidget):
         main_layout.addWidget(self.scroll, 1)
 
         # Bottom subtle resize grip row
-        grip_row = QHBoxLayout()
+        self.grip_widget = QWidget()
+        self.grip_widget.setStyleSheet("background: transparent;")
+        grip_row = QHBoxLayout(self.grip_widget)
         grip_row.setContentsMargins(0, 0, 0, 0)
         self.lbl_hint = QLabel("右下角可拖拽调整悬浮窗大小 · 托盘图标支持开启鼠标穿透")
         self.lbl_hint.setStyleSheet("color: rgba(148, 163, 184, 0.55); font-size: 10px;")
@@ -454,7 +467,16 @@ class SubtitleOverlayWindow(QWidget):
         self.size_grip = QSizeGrip(self)
         self.size_grip.setFixedSize(14, 14)
         grip_row.addWidget(self.size_grip)
-        main_layout.addLayout(grip_row)
+        main_layout.addWidget(self.grip_widget)
+
+        # Floating top-right restore button shown ONLY in Zen (pure subtitle) mode
+        self.btn_zen_restore = QPushButton("👁", self.container)
+        self.btn_zen_restore.setObjectName("ZenRestoreBtn")
+        self.btn_zen_restore.setFixedSize(28, 24)
+        self.btn_zen_restore.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_zen_restore.setToolTip("恢复显示所有按钮和提示（也可按 Esc 键或右键托盘恢复）")
+        self.btn_zen_restore.clicked.connect(self._toggle_zen_mode)
+        self.btn_zen_restore.setVisible(False)
 
     def _build_tray(self) -> None:
         self.tray = QSystemTrayIcon(self._icon, self)
@@ -473,6 +495,11 @@ class SubtitleOverlayWindow(QWidget):
         self.act_click_through.setCheckable(True)
         self.act_click_through.triggered.connect(self._toggle_click_through)
         menu.addAction(self.act_click_through)
+
+        self.act_zen = QAction("纯净字幕模式（隐藏所有按钮和提示）", self)
+        self.act_zen.setCheckable(True)
+        self.act_zen.triggered.connect(lambda checked: self._set_zen_mode(checked))
+        menu.addAction(self.act_zen)
 
         menu.addSeparator()
 
@@ -612,6 +639,19 @@ class SubtitleOverlayWindow(QWidget):
                 background-color: rgba(51, 65, 85, 0.85);
                 color: #e2e8f0;
             }}
+            QPushButton#ZenRestoreBtn {{
+                background-color: rgba(15, 23, 42, 0.45);
+                border: 1px solid rgba(148, 163, 184, 0.25);
+                border-radius: 6px;
+                color: rgba(226, 232, 240, 0.7);
+                font-size: 12px;
+                padding: 0px;
+            }}
+            QPushButton#ZenRestoreBtn:hover {{
+                background-color: rgba(37, 99, 235, 0.9);
+                border: 1px solid #60a5fa;
+                color: #ffffff;
+            }}
             QComboBox {{
                 background-color: rgba(30, 41, 59, 0.85);
                 color: #e2e8f0;
@@ -736,6 +776,24 @@ class SubtitleOverlayWindow(QWidget):
             return
         super().mouseReleaseEvent(event)
 
+    def _position_zen_restore(self) -> None:
+        if not hasattr(self, "btn_zen_restore") or not hasattr(self, "container"):
+            return
+        x = max(8, self.container.width() - self.btn_zen_restore.width() - 8)
+        self.btn_zen_restore.move(x, 18)
+        self.btn_zen_restore.raise_()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._position_zen_restore()
+
+    def keyPressEvent(self, event) -> None:
+        if self._zen_mode and event.key() == Qt.Key.Key_Escape:
+            self._set_zen_mode(False)
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
     # --- Quick controls ---
     def _apply_channel_mode(self, new_mode: str, *, auto_start: bool = False) -> None:
         self._cfg.audio_mode = new_mode
@@ -787,8 +845,10 @@ class SubtitleOverlayWindow(QWidget):
 
     def _on_quick_dir_changed(self) -> None:
         new_dir = str(self.cmb_quick_dir.currentData() or "auto_to_zh")
-        self._cfg.direction = new_dir
-        self._cfg.save()
+        if new_dir != self._cfg.direction:
+            self._cfg.direction = new_dir
+            self._cfg.save()
+            self._engine.clear_context()
 
     def _on_quick_engine_changed(self) -> None:
         new_provider = str(self.cmb_quick_engine.currentData() or "gemini")
@@ -828,6 +888,27 @@ class SubtitleOverlayWindow(QWidget):
         self.btn_bilingual.setText("双语" if self._cfg.show_original else "极简")
         self._update_background_style()
 
+    def _toggle_zen_mode(self) -> None:
+        self._set_zen_mode(not self._zen_mode)
+
+    def _set_zen_mode(self, enabled: bool) -> None:
+        self._zen_mode = bool(enabled)
+        if hasattr(self, "act_zen"):
+            self.act_zen.setChecked(self._zen_mode)
+
+        if self._zen_mode:
+            self.top_bar_widget.setVisible(False)
+            self.grip_widget.setVisible(False)
+            self.lbl_empty.setVisible(False)
+            self.btn_zen_restore.setVisible(True)
+            QTimer.singleShot(0, self._position_zen_restore)
+        else:
+            self.btn_zen_restore.setVisible(False)
+            self.top_bar_widget.setVisible(True)
+            self.grip_widget.setVisible(not self._locked_compact)
+            if not self._cards:
+                self.lbl_empty.setVisible(True)
+
     def _toggle_compact_lock(self) -> None:
         self._locked_compact = not self._locked_compact
         self.btn_lock.setText("🔒" if self._locked_compact else "🔓")
@@ -839,9 +920,9 @@ class SubtitleOverlayWindow(QWidget):
         self.btn_bilingual.setVisible(show_extra)
         self.btn_export.setVisible(show_extra)
         self.btn_clear.setVisible(show_extra)
+        self.btn_zen.setVisible(show_extra)
         self.btn_settings.setVisible(show_extra)
-        self.lbl_hint.setVisible(show_extra)
-        self.size_grip.setVisible(show_extra)
+        self.grip_widget.setVisible(show_extra and not self._zen_mode)
 
     def _toggle_click_through(self, checked: bool) -> None:
         self._click_through = checked
@@ -1078,7 +1159,7 @@ class SubtitleOverlayWindow(QWidget):
         self._cards.clear()
         self._card_order.clear()
         self._engine.clear_context()
-        self.lbl_empty.setVisible(True)
+        self.lbl_empty.setVisible(not self._zen_mode)
 
     def export_transcript(self) -> None:
         if not self._history:
